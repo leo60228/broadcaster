@@ -3,6 +3,16 @@ name = "broadcaster"
 version = "0.1.0"
 authors = ["leo60228 <iakornfeld@gmail.com>"]
 edition = "2018"
+description = "Broadcasting futures mpmc channel"
+repository = "https://github.com/leo60228/broadcaster"
+homepage = "https://github.com/leo60228/broadcaster"
+readme = "README.md"
+keywords = ["futures", "broadcast", "channel", "mpmc"]
+categories = ["asynchronous", "concurrency"]
+license = "MIT OR Apache-2.0"
+is-it-maintained-issue-resolution = { repository = "leo60228/broadcaster" }
+is-it-maintained-open-issues = { repository = "leo60228/broadcaster" }
+maintenance = { status = "experimental"}
 
 [features]
 default = ["default-channels"]
