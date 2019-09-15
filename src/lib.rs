@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 //! broadcaster provides a wrapper for any Stream and Sink implementing the mpsc pattern to enable
@@ -47,7 +46,23 @@ pub struct BroadcastChannel<
 {
     senders: Arc<RwLock<Vec<S>>>,
     receiver: R,
-    ctor: Arc<dyn Fn() -> (S, R)>,
+    ctor: Arc<dyn Fn() -> (S, R) + Send + Sync>,
+}
+
+unsafe impl<T, S, R> Send for BroadcastChannel<T, S, R>
+where
+    T: Send + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Sink<T>,
+    R: Send + Unpin + Stream<Item = T>,
+{
+}
+
+unsafe impl<T, S, R> Sync for BroadcastChannel<T, S, R>
+where
+    T: Send + Sync + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Sink<T>,
+    R: Sync + Unpin + Stream<Item = T>,
+{
 }
 
 #[cfg(feature = "default-channels")]
@@ -84,7 +99,7 @@ where
 {
     /// Construct a new channel from any Sink and Stream. For proper functionality, cloning a
     /// Sender will create a new sink that also sends data to Receiver.
-    pub fn with_ctor(ctor: Arc<dyn Fn() -> (S, R)>) -> Self {
+    pub fn with_ctor(ctor: Arc<dyn Fn() -> (S, R) + Send + Sync>) -> Self {
         let (tx, rx) = ctor();
         Self {
             senders: Arc::new(RwLock::new(vec![tx])),

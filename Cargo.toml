@@ -1,6 +1,6 @@
 [package]
 name = "broadcaster"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["leo60228 <iakornfeld@gmail.com>"]
 edition = "2018"
 description = "Broadcasting futures mpmc channel"
@@ -10,6 +10,8 @@ readme = "README.md"
 keywords = ["futures", "broadcast", "channel", "mpmc"]
 categories = ["asynchronous", "concurrency"]
 license = "MIT OR Apache-2.0"
+
+[badges]
 is-it-maintained-issue-resolution = { repository = "leo60228/broadcaster" }
 is-it-maintained-open-issues = { repository = "leo60228/broadcaster" }
 maintenance = { status = "experimental"}
