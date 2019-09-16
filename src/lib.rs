@@ -27,7 +27,8 @@ use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
 use slab::Slab;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 #[cfg(feature = "default-channels")]
 use futures_channel::mpsc::*;
@@ -109,7 +110,7 @@ where
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
         // can't be split up because of how async/await works
         let mut senders: Slab<S> =
-            Slab::clone(&*self.senders.read().expect("senders rwlock poisoned"));
+            Slab::clone(&*self.senders.read());
 
         try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
         Ok(())
@@ -132,7 +133,6 @@ where
         let sender_key = self
             .senders
             .write()
-            .expect("senders rwlock poisoned")
             .insert(tx);
 
         Self {
@@ -153,7 +153,6 @@ where
     fn drop(&mut self) {
         self.senders
             .write()
-            .expect("sender rwlock poisoned")
             .remove(self.sender_key);
     }
 }
