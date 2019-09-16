@@ -155,4 +155,13 @@ mod test {
         assert_eq!(block_on(chan.recv()), Some(6));
         assert_eq!(block_on(chan2.recv()), Some(6));
     }
+
+    fn assert_impl_send<T: Send>() {}
+    fn assert_impl_sync<T: Sync>() {}
+
+    #[test]
+    fn send_sync() {
+        assert_impl_send::<BroadcastChannel<i32>>();
+        assert_impl_sync::<BroadcastChannel<i32>>();
+    }
 }
