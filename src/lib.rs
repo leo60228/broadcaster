@@ -26,6 +26,7 @@ use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
+use slab::Slab;
 use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "default-channels")]
@@ -44,7 +45,8 @@ pub struct BroadcastChannel<
     S: Send + Sync + Unpin + Clone + Sink<T>,
     R: Unpin + Stream<Item = T>,
 {
-    senders: Arc<RwLock<Vec<S>>>,
+    senders: Arc<RwLock<Slab<S>>>,
+    sender_key: usize,
     receiver: R,
     ctor: Arc<dyn Fn() -> (S, R) + Send + Sync>,
 }
@@ -54,8 +56,11 @@ impl<T: Send + Clone> BroadcastChannel<T> {
     /// Create a new unbounded channel. Requires the `default-channels` feature.
     pub fn new() -> Self {
         let (tx, rx) = unbounded();
+        let mut slab = Slab::new();
+        let sender_key = slab.insert(tx);
         Self {
-            senders: Arc::new(RwLock::new(vec![tx])),
+            senders: Arc::new(RwLock::new(slab)),
+            sender_key,
             receiver: rx,
             ctor: Arc::new(unbounded),
         }
@@ -67,8 +72,11 @@ impl<T: Send + Clone> BroadcastChannel<T, Sender<T>, Receiver<T>> {
     /// Create a new bounded channel with a specific capacity. Requires the `default-channels` feature.
     pub fn with_cap(cap: usize) -> Self {
         let (tx, rx) = channel(cap);
+        let mut slab = Slab::new();
+        let sender_key = slab.insert(tx);
         Self {
-            senders: Arc::new(RwLock::new(vec![tx])),
+            senders: Arc::new(RwLock::new(slab)),
+            sender_key,
             receiver: rx,
             ctor: Arc::new(move || channel(cap)),
         }
@@ -85,8 +93,11 @@ where
     /// Sender will create a new sink that also sends data to Receiver.
     pub fn with_ctor(ctor: Arc<dyn Fn() -> (S, R) + Send + Sync>) -> Self {
         let (tx, rx) = ctor();
+        let mut slab = Slab::new();
+        let sender_key = slab.insert(tx);
         Self {
-            senders: Arc::new(RwLock::new(vec![tx])),
+            senders: Arc::new(RwLock::new(slab)),
+            sender_key,
             receiver: rx,
             ctor,
         }
@@ -97,10 +108,10 @@ where
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
         // can't be split up because of how async/await works
-        let mut senders: Vec<S> =
-            Vec::clone(&*self.senders.read().expect("senders rwlock poisoned"));
+        let mut senders: Slab<S> =
+            Slab::clone(&*self.senders.read().expect("senders rwlock poisoned"));
 
-        try_join_all(senders.iter_mut().map(|s| s.send(item.clone()))).await?;
+        try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
         Ok(())
     }
 
@@ -118,16 +129,32 @@ where
 {
     fn clone(&self) -> Self {
         let (tx, rx) = (self.ctor)();
-        self.senders
+        let sender_key = self
+            .senders
             .write()
             .expect("senders rwlock poisoned")
-            .push(tx);
+            .insert(tx);
 
         Self {
             senders: self.senders.clone(),
+            sender_key,
             receiver: rx,
             ctor: self.ctor.clone(),
         }
+    }
+}
+
+impl<T, S, R> Drop for BroadcastChannel<T, S, R>
+where
+    T: Send + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Sink<T>,
+    R: Unpin + Stream<Item = T>,
+{
+    fn drop(&mut self) {
+        self.senders
+            .write()
+            .expect("sender rwlock poisoned")
+            .remove(self.sender_key);
     }
 }
 

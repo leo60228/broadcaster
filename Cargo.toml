@@ -1,6 +1,6 @@
 [package]
 name = "broadcaster"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["leo60228 <iakornfeld@gmail.com>"]
 edition = "2018"
 description = "Broadcasting futures mpmc channel"
@@ -25,6 +25,7 @@ futures-core-preview = "0.3.0-alpha.18"
 futures-sink-preview = "0.3.0-alpha.18"
 futures-util-preview = { version = "0.3.0-alpha.18", features = ["sink"] }
 futures-channel-preview = { version = "0.3.0-alpha.18", optional = true, features = ["sink"] }
+slab = "0.4.2"
 
 [dev-dependencies]
 futures-executor-preview = "0.3.0-alpha.18"
