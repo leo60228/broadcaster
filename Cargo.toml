@@ -1,6 +1,6 @@
 [package]
 name = "broadcaster"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["leo60228 <iakornfeld@gmail.com>"]
 edition = "2018"
 description = "Broadcasting futures mpmc channel"

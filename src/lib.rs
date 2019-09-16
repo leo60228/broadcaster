@@ -26,7 +26,6 @@ use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
-use std::mem::drop;
 use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "default-channels")]
@@ -97,9 +96,9 @@ where
     /// futures-channel does not support comparing a sender and receiver. If this is not the
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
-        let guard = self.senders.read().expect("senders rwlock poisoned");
-        let mut senders = guard.clone(); // keep possible write latency outside the critical section
-        drop(guard); // explicitly drop it to prevent deadlocks if it goes across an await point
+        // can't be split up because of how async/await works
+        let mut senders: Vec<S> =
+            Vec::clone(&*self.senders.read().expect("senders rwlock poisoned"));
 
         try_join_all(senders.iter_mut().map(|s| s.send(item.clone()))).await?;
         Ok(())
@@ -144,20 +143,28 @@ mod test {
         assert_eq!(block_on(chan.recv()), Some(5));
     }
 
-    #[test]
-    fn recv_two() {
-        let mut chan = BroadcastChannel::new();
-        let mut chan2 = chan.clone();
-        block_on(chan.send(&5)).unwrap();
-        assert_eq!(block_on(chan.recv()), Some(5));
-        assert_eq!(block_on(chan2.recv()), Some(5));
-        block_on(chan2.send(&6)).unwrap();
-        assert_eq!(block_on(chan.recv()), Some(6));
-        assert_eq!(block_on(chan2.recv()), Some(6));
-    }
-
     fn assert_impl_send<T: Send>() {}
     fn assert_impl_sync<T: Sync>() {}
+    fn assert_val_impl_send<T: Send>(_val: &T) {}
+    fn assert_val_impl_sync<T: Sync>(_val: &T) {}
+
+    #[test]
+    fn recv_two() {
+        let fut = async {
+            let mut chan = BroadcastChannel::new();
+            chan.send(&5i32).await?;
+            assert_eq!(chan.recv().await, Some(5));
+
+            let mut chan2 = chan.clone();
+            chan2.send(&6i32).await?;
+            assert_eq!(chan.recv().await, Some(6));
+            assert_eq!(chan2.recv().await, Some(6));
+            Ok::<(), futures_channel::mpsc::SendError>(())
+        };
+        assert_val_impl_send(&fut);
+        assert_val_impl_sync(&fut);
+        block_on(fut).unwrap();
+    }
 
     #[test]
     fn send_sync() {
