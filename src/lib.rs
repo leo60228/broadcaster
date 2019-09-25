@@ -26,10 +26,10 @@ use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
-use slab::Slab;
-use std::sync::Arc;
-use std::fmt::{self, Debug};
 use parking_lot::RwLock;
+use slab::Slab;
+use std::fmt::{self, Debug};
+use std::sync::Arc;
 
 #[cfg(feature = "default-channels")]
 use futures_channel::mpsc::*;
@@ -83,6 +83,16 @@ impl<T: Send + Clone> BroadcastChannel<T, Sender<T>, Receiver<T>> {
             ctor: Arc::new(move || channel(cap)),
         }
     }
+
+    /// Try sending a value on a bounded channel. Requires the `default-channels` feature.
+    pub fn try_send(&self, item: &T) -> Result<(), TrySendError<T>> {
+        let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read());
+
+        senders
+            .iter_mut()
+            .map(|(_, s)| s.try_send(item.clone()))
+            .collect()
+    }
 }
 
 impl<T, S, R> BroadcastChannel<T, S, R>
@@ -110,8 +120,7 @@ where
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
         // can't be split up because of how async/await works
-        let mut senders: Slab<S> =
-            Slab::clone(&*self.senders.read());
+        let mut senders: Slab<S> = Slab::clone(&*self.senders.read());
 
         try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
         Ok(())
@@ -131,10 +140,7 @@ where
 {
     fn clone(&self) -> Self {
         let (tx, rx) = (self.ctor)();
-        let sender_key = self
-            .senders
-            .write()
-            .insert(tx);
+        let sender_key = self.senders.write().insert(tx);
 
         Self {
             senders: self.senders.clone(),
@@ -152,9 +158,7 @@ where
     R: Unpin + Stream<Item = T>,
 {
     fn drop(&mut self) {
-        self.senders
-            .write()
-            .remove(self.sender_key);
+        self.senders.write().remove(self.sender_key);
     }
 }
 
@@ -198,6 +202,22 @@ mod test {
             assert_eq!(chan.recv().await, Some(6));
             assert_eq!(chan2.recv().await, Some(6));
             Ok::<(), futures_channel::mpsc::SendError>(())
+        };
+        fut.now_or_never().unwrap().unwrap();
+    }
+
+    #[test]
+    fn try_send() {
+        let fut = async {
+            let mut chan = BroadcastChannel::with_cap(2);
+            chan.try_send(&5i32)?;
+            assert_eq!(chan.recv().await, Some(5));
+
+            let mut chan2 = chan.clone();
+            chan2.try_send(&6i32)?;
+            assert_eq!(chan.recv().await, Some(6));
+            assert_eq!(chan2.recv().await, Some(6));
+            Ok::<(), futures_channel::mpsc::TrySendError<i32>>(())
         };
         fut.now_or_never().unwrap().unwrap();
     }
