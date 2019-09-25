@@ -161,12 +161,29 @@ where
 mod test {
     use super::BroadcastChannel;
     use futures_executor::block_on;
+    use futures_util::future::FutureExt;
 
     #[test]
     fn send_recv() {
         let mut chan = BroadcastChannel::new();
         block_on(chan.send(&5)).unwrap();
         assert_eq!(block_on(chan.recv()), Some(5));
+    }
+
+    #[test]
+    fn now_or_never() {
+        let fut = async {
+            let mut chan = BroadcastChannel::new();
+            chan.send(&5i32).await?;
+            assert_eq!(chan.recv().await, Some(5));
+
+            let mut chan2 = chan.clone();
+            chan2.send(&6i32).await?;
+            assert_eq!(chan.recv().await, Some(6));
+            assert_eq!(chan2.recv().await, Some(6));
+            Ok::<(), futures_channel::mpsc::SendError>(())
+        };
+        fut.now_or_never().unwrap().unwrap();
     }
 
     fn assert_impl_send<T: Send>() {}
