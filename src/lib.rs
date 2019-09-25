@@ -28,6 +28,7 @@ use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
 use slab::Slab;
 use std::sync::Arc;
+use std::fmt::{self, Debug};
 use parking_lot::RwLock;
 
 #[cfg(feature = "default-channels")]
@@ -154,6 +155,21 @@ where
         self.senders
             .write()
             .remove(self.sender_key);
+    }
+}
+
+impl<T, S, R> Debug for BroadcastChannel<T, S, R>
+where
+    T: Send + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Debug + Sink<T>,
+    R: Unpin + Debug + Stream<Item = T>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BroadcastChannel")
+            .field("senders", &self.senders)
+            .field("sender_key", &self.sender_key)
+            .field("receiver", &self.receiver)
+            .finish()
     }
 }
 
