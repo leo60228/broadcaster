@@ -26,10 +26,15 @@ use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
-use std::sync::RwLock;
 use slab::Slab;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
+
+#[cfg(not(feature = "default-channels"))]
+use std::sync::RwLock;
+
+#[cfg(feature = "default-channels")]
+use parking_lot::RwLock;
 
 #[cfg(feature = "default-channels")]
 use futures_channel::mpsc::*;
@@ -86,6 +91,10 @@ impl<T: Send + Clone> BroadcastChannel<T, Sender<T>, Receiver<T>> {
 
     /// Try sending a value on a bounded channel. Requires the `default-channels` feature.
     pub fn try_send(&self, item: &T) -> Result<(), TrySendError<T>> {
+        #[cfg(feature = "default-sync")]
+        let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read());
+
+        #[cfg(not(feature = "default-sync"))]
         let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read().unwrap());
 
         senders
@@ -120,6 +129,10 @@ where
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
         // can't be split up because of how async/await works
+        #[cfg(feature = "default-sync")]
+        let mut senders: Slab<S> = Slab::clone(&*self.senders.read());
+
+        #[cfg(not(feature = "default-sync"))]
         let mut senders: Slab<S> = Slab::clone(&*self.senders.read().unwrap());
 
         try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
@@ -140,6 +153,10 @@ where
 {
     fn clone(&self) -> Self {
         let (tx, rx) = (self.ctor)();
+        #[cfg(feature = "default-sync")]
+        let sender_key = self.senders.write().insert(tx);
+
+        #[cfg(not(feature = "default-sync"))]
         let sender_key = self.senders.write().unwrap().insert(tx);
 
         Self {
@@ -158,6 +175,10 @@ where
     R: Unpin + Stream<Item = T>,
 {
     fn drop(&mut self) {
+        #[cfg(feature = "default-sync")]
+        self.senders.write().remove(self.sender_key);
+
+        #[cfg(not(feature = "default-sync"))]
         self.senders.write().unwrap().remove(self.sender_key);
     }
 }
