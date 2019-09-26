@@ -26,7 +26,7 @@ use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
 use futures_util::try_future::try_join_all;
-use parking_lot::RwLock;
+use std::sync::RwLock;
 use slab::Slab;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -86,7 +86,7 @@ impl<T: Send + Clone> BroadcastChannel<T, Sender<T>, Receiver<T>> {
 
     /// Try sending a value on a bounded channel. Requires the `default-channels` feature.
     pub fn try_send(&self, item: &T) -> Result<(), TrySendError<T>> {
-        let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read());
+        let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read().unwrap());
 
         senders
             .iter_mut()
@@ -120,7 +120,7 @@ where
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
         // can't be split up because of how async/await works
-        let mut senders: Slab<S> = Slab::clone(&*self.senders.read());
+        let mut senders: Slab<S> = Slab::clone(&*self.senders.read().unwrap());
 
         try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
         Ok(())
@@ -140,7 +140,7 @@ where
 {
     fn clone(&self) -> Self {
         let (tx, rx) = (self.ctor)();
-        let sender_key = self.senders.write().insert(tx);
+        let sender_key = self.senders.write().unwrap().insert(tx);
 
         Self {
             senders: self.senders.clone(),
@@ -158,7 +158,7 @@ where
     R: Unpin + Stream<Item = T>,
 {
     fn drop(&mut self) {
-        self.senders.write().remove(self.sender_key);
+        self.senders.write().unwrap().remove(self.sender_key);
     }
 }
 
