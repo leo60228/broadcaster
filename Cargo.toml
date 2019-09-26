@@ -17,9 +17,9 @@ is-it-maintained-open-issues = { repository = "leo60228/broadcaster" }
 maintenance = { status = "experimental"}
 
 [features]
-default = ["default-channels", "default-sync"]
+default = ["default-channels", "parking-lot"]
 default-channels = ["futures-channel-preview"]
-default-sync = ["parking_lot"]
+parking-lot = ["parking_lot"]
 
 [dependencies]
 futures-core-preview = "0.3.0-alpha.18"

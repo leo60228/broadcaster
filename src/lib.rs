@@ -91,10 +91,10 @@ impl<T: Send + Clone> BroadcastChannel<T, Sender<T>, Receiver<T>> {
 
     /// Try sending a value on a bounded channel. Requires the `default-channels` feature.
     pub fn try_send(&self, item: &T) -> Result<(), TrySendError<T>> {
-        #[cfg(feature = "default-sync")]
+        #[cfg(feature = "parking-lot")]
         let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read());
 
-        #[cfg(not(feature = "default-sync"))]
+        #[cfg(not(feature = "parking-lot"))]
         let mut senders: Slab<Sender<T>> = Slab::clone(&*self.senders.read().unwrap());
 
         senders
@@ -129,10 +129,10 @@ where
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
         // can't be split up because of how async/await works
-        #[cfg(feature = "default-sync")]
+        #[cfg(feature = "parking-lot")]
         let mut senders: Slab<S> = Slab::clone(&*self.senders.read());
 
-        #[cfg(not(feature = "default-sync"))]
+        #[cfg(not(feature = "parking-lot"))]
         let mut senders: Slab<S> = Slab::clone(&*self.senders.read().unwrap());
 
         try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
@@ -153,10 +153,10 @@ where
 {
     fn clone(&self) -> Self {
         let (tx, rx) = (self.ctor)();
-        #[cfg(feature = "default-sync")]
+        #[cfg(feature = "parking-lot")]
         let sender_key = self.senders.write().insert(tx);
 
-        #[cfg(not(feature = "default-sync"))]
+        #[cfg(not(feature = "parking-lot"))]
         let sender_key = self.senders.write().unwrap().insert(tx);
 
         Self {
@@ -175,10 +175,10 @@ where
     R: Unpin + Stream<Item = T>,
 {
     fn drop(&mut self) {
-        #[cfg(feature = "default-sync")]
+        #[cfg(feature = "parking-lot")]
         self.senders.write().remove(self.sender_key);
 
-        #[cfg(not(feature = "default-sync"))]
+        #[cfg(not(feature = "parking-lot"))]
         self.senders.write().unwrap().remove(self.sender_key);
     }
 }
