@@ -1,6 +1,6 @@
 [package]
 name = "broadcaster"
-version = "0.2.7"
+version = "0.3.0"
 authors = ["leo60228 <iakornfeld@gmail.com>"]
 edition = "2018"
 description = "Broadcasting futures mpmc channel"
@@ -18,16 +18,16 @@ maintenance = { status = "experimental"}
 
 [features]
 default = ["default-channels", "parking-lot"]
-default-channels = ["futures-channel-preview"]
+default-channels = ["futures-channel"]
 parking-lot = ["parking_lot"]
 
 [dependencies]
-futures-core-preview = "0.3.0-alpha.18"
-futures-sink-preview = "0.3.0-alpha.18"
-futures-util-preview = { version = "0.3.0-alpha.18", features = ["sink"] }
-futures-channel-preview = { version = "0.3.0-alpha.18", optional = true, features = ["sink"] }
+futures-core = "0.3.0"
+futures-sink = "0.3.0"
+futures-util = { version = "0.3.0", features = ["sink"] }
+futures-channel = { version = "0.3.0", optional = true, features = ["sink"] }
 slab = "0.4.2"
 parking_lot = { version = "0.9.0", optional = true }
 
 [dev-dependencies]
-futures-executor-preview = "0.3.0-alpha.18"
+futures-executor = "0.3.0"
