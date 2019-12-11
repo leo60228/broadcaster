@@ -212,12 +212,68 @@ impl<T, S, R> Stream for BroadcastChannel<T, S, R>
 where
     T: Send + Clone + 'static,
     S: Send + Sync + Unpin + Clone + Sink<T>,
-    R: Unpin + Stream<Item = T>
+    R: Unpin + Stream<Item = T>,
 {
     type Item = T;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::into_inner(self).receiver.poll_next_unpin(cx)
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        (&mut self.receiver).poll_next_unpin(cx)
+    }
+}
+
+impl<T, S, R> Sink<T> for &BroadcastChannel<T, S, R>
+where
+    T: Send + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Sink<T>,
+    R: Unpin + Stream<Item = T>,
+{
+    type Error = S::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).poll_ready(cx))
+            .find_map(|poll| match poll {
+                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
+                _ => None,
+            })
+            .or_else(|| Some(Poll::Ready(Ok(()))))
+            .unwrap()
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).start_send(item.clone()))
+            .collect::<Result<_, _>>()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).poll_flush(cx))
+            .find_map(|poll| match poll {
+                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
+                _ => None,
+            })
+            .or_else(|| Some(Poll::Ready(Ok(()))))
+            .unwrap()
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).poll_close(cx))
+            .find_map(|poll| match poll {
+                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
+                _ => None,
+            })
+            .or_else(|| Some(Poll::Ready(Ok(()))))
+            .unwrap()
     }
 }
 
@@ -230,42 +286,19 @@ impl<T, S, R> Sink<T> for BroadcastChannel<T, S, R>
     type Error = S::Error;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::into_inner(self).senders().iter_mut()
-            .map(|(_, sender)| Pin::new(sender).poll_ready(cx))
-            .find_map(|poll| match poll {
-                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
-                _ => None,
-            })
-            .or_else(|| Some(Poll::Ready(Ok(()))))
-            .unwrap()
+        Sink::poll_ready(Pin::new(&mut &*self), cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
-        Pin::into_inner(self).senders().iter_mut()
-            .map(|(_, sender)| Pin::new(sender).start_send(item.clone()))
-            .collect::<Result<_, _>>()
+        Sink::start_send(Pin::new(&mut &*self), item)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::into_inner(self).senders().iter_mut()
-            .map(|(_, sender)| Pin::new(sender).poll_flush(cx))
-            .find_map(|poll| match poll {
-                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
-                _ => None,
-            })
-            .or_else(|| Some(Poll::Ready(Ok(()))))
-            .unwrap()
+        Sink::poll_flush(Pin::new(&mut &*self), cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::into_inner(self).senders().iter_mut()
-            .map(|(_, sender)| Pin::new(sender).poll_close(cx))
-            .find_map(|poll| match poll {
-                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
-                _ => None,
-            })
-            .or_else(|| Some(Poll::Ready(Ok(()))))
-            .unwrap()
+        Sink::poll_close(Pin::new(&mut &*self), cx)
     }
 }
 
