@@ -27,7 +27,7 @@ use futures_core::{future::*, stream::*, Poll};
 use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
-use futures_util::try_future::try_join_all;
+use futures_util::future::try_join_all;
 use slab::Slab;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
