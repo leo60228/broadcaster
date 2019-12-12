@@ -8,20 +8,22 @@
 //! use broadcaster::BroadcastChannel;
 //!
 //! # use futures_executor::block_on;
+//! use futures_util::StreamExt;
+//!
 //! # block_on(async {
 //! let mut chan = BroadcastChannel::new();
 //! chan.send(&5i32).await?;
-//! assert_eq!(chan.recv().await, Some(5));
+//! assert_eq!(chan.next().await, Some(5));
 //!
 //! let mut chan2 = chan.clone();
 //! chan2.send(&6i32).await?;
-//! assert_eq!(chan.recv().await, Some(6));
-//! assert_eq!(chan2.recv().await, Some(6));
+//! assert_eq!(chan.next().await, Some(6));
+//! assert_eq!(chan2.next().await, Some(6));
 //! # Ok::<(), futures_channel::mpsc::SendError>(())
 //! # }).unwrap();
 //! ```
 
-use futures_core::{future::*, stream::*};
+use futures_core::{future::*, stream::*, task::Poll};
 use futures_sink::Sink;
 use futures_util::sink::SinkExt;
 use futures_util::stream::StreamExt;
@@ -38,6 +40,8 @@ use parking_lot::RwLock;
 
 #[cfg(feature = "default-channels")]
 use futures_channel::mpsc::*;
+use futures_util::task::Context;
+use std::pin::Pin;
 
 /// A broadcast channel, wrapping any clonable Stream and Sink to have every message sent to every
 /// receiver.
@@ -128,20 +132,26 @@ where
     /// futures-channel does not support comparing a sender and receiver. If this is not the
     /// desired behavior, you must handle it yourself.
     pub async fn send(&self, item: &T) -> Result<(), S::Error> {
-        // can't be split up because of how async/await works
-        #[cfg(feature = "parking-lot")]
-        let mut senders: Slab<S> = Slab::clone(&*self.senders.read());
-
-        #[cfg(not(feature = "parking-lot"))]
-        let mut senders: Slab<S> = Slab::clone(&*self.senders.read().unwrap());
-
+        let mut senders = self.senders();
         try_join_all(senders.iter_mut().map(|(_, s)| s.send(item.clone()))).await?;
         Ok(())
     }
 
     /// Receive a single value from the channel.
     pub fn recv(&mut self) -> impl Future<Output = Option<T>> + '_ {
-        self.receiver.next()
+        self.next()
+    }
+
+    /// Internal helper method to get a copy of the senders
+    fn senders(&self) -> Slab<S> {
+        // can't be split up because of how async/await works
+        #[cfg(feature = "parking-lot")]
+        let senders: Slab<S> = Slab::clone(&*self.senders.read());
+
+        #[cfg(not(feature = "parking-lot"))]
+        let senders: Slab<S> = Slab::clone(&*self.senders.read().unwrap());
+
+        senders
     }
 }
 
@@ -198,17 +208,132 @@ where
     }
 }
 
+impl<T, S, R> Stream for BroadcastChannel<T, S, R>
+where
+    T: Send + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Sink<T>,
+    R: Unpin + Stream<Item = T>,
+{
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        (&mut self.receiver).poll_next_unpin(cx)
+    }
+}
+
+impl<T, S, R> Sink<T> for &BroadcastChannel<T, S, R>
+where
+    T: Send + Clone + 'static,
+    S: Send + Sync + Unpin + Clone + Sink<T>,
+    R: Unpin + Stream<Item = T>,
+{
+    type Error = S::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).poll_ready(cx))
+            .find_map(|poll| match poll {
+                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
+                _ => None,
+            })
+            .or_else(|| Some(Poll::Ready(Ok(()))))
+            .unwrap()
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).start_send(item.clone()))
+            .collect::<Result<_, _>>()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).poll_flush(cx))
+            .find_map(|poll| match poll {
+                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
+                _ => None,
+            })
+            .or_else(|| Some(Poll::Ready(Ok(()))))
+            .unwrap()
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        (*self)
+            .senders()
+            .iter_mut()
+            .map(|(_, sender)| Pin::new(sender).poll_close(cx))
+            .find_map(|poll| match poll {
+                Poll::Ready(Err(_)) | Poll::Pending => Some(poll),
+                _ => None,
+            })
+            .or_else(|| Some(Poll::Ready(Ok(()))))
+            .unwrap()
+    }
+}
+
+impl<T, S, R> Sink<T> for BroadcastChannel<T, S, R>
+    where
+        T: Send + Clone + 'static,
+        S: Send + Sync + Unpin + Clone + Sink<T>,
+        R: Unpin + Stream<Item = T>,
+{
+    type Error = S::Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::poll_ready(Pin::new(&mut &*self), cx)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        Sink::start_send(Pin::new(&mut &*self), item)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::poll_flush(Pin::new(&mut &*self), cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Sink::poll_close(Pin::new(&mut &*self), cx)
+    }
+}
+
 #[cfg(all(feature = "default-channels", test))]
 mod test {
     use super::BroadcastChannel;
     use futures_executor::block_on;
-    use futures_util::future::FutureExt;
+    use futures_util::future::{FutureExt, ready};
+    use futures_core::future::Future;
+    use futures_util::{StreamExt, SinkExt};
+    use futures_channel::mpsc::SendError;
 
     #[test]
-    fn send_recv() {
+    fn send_next() {
         let mut chan = BroadcastChannel::new();
         block_on(chan.send(&5)).unwrap();
-        assert_eq!(block_on(chan.recv()), Some(5));
+        assert_eq!(block_on(chan.next()), Some(5));
+    }
+
+    #[test]
+    fn split() {
+        // test some of the extension methods from StreamExt and SinkExt
+        fn plus_1(num: usize) -> impl Future<Output = Result<usize, SendError>> {
+            ready(Ok(num + 1))
+        }
+
+        let chan = BroadcastChannel::new();
+        let chan_cloned = chan.clone();
+
+        let (sink, stream) = chan.split();
+        let mut sink = sink.with(plus_1);
+        block_on(sink.send(5)).unwrap();
+        block_on(chan_cloned.send(&10)).unwrap();
+
+        assert_eq!(block_on(stream.take(2).collect::<Vec<_>>()), vec![6, 10]);
     }
 
     #[test]
@@ -216,12 +341,12 @@ mod test {
         let fut = async {
             let mut chan = BroadcastChannel::new();
             chan.send(&5i32).await?;
-            assert_eq!(chan.recv().await, Some(5));
+            assert_eq!(chan.next().await, Some(5));
 
             let mut chan2 = chan.clone();
             chan2.send(&6i32).await?;
-            assert_eq!(chan.recv().await, Some(6));
-            assert_eq!(chan2.recv().await, Some(6));
+            assert_eq!(chan.next().await, Some(6));
+            assert_eq!(chan2.next().await, Some(6));
             Ok::<(), futures_channel::mpsc::SendError>(())
         };
         fut.now_or_never().unwrap().unwrap();
@@ -232,12 +357,12 @@ mod test {
         let fut = async {
             let mut chan = BroadcastChannel::with_cap(2);
             chan.try_send(&5i32)?;
-            assert_eq!(chan.recv().await, Some(5));
+            assert_eq!(chan.next().await, Some(5));
 
             let mut chan2 = chan.clone();
             chan2.try_send(&6i32)?;
-            assert_eq!(chan.recv().await, Some(6));
-            assert_eq!(chan2.recv().await, Some(6));
+            assert_eq!(chan.next().await, Some(6));
+            assert_eq!(chan2.next().await, Some(6));
             Ok::<(), futures_channel::mpsc::TrySendError<i32>>(())
         };
         fut.now_or_never().unwrap().unwrap();
@@ -253,12 +378,12 @@ mod test {
         let fut = async {
             let mut chan = BroadcastChannel::new();
             chan.send(&5i32).await?;
-            assert_eq!(chan.recv().await, Some(5));
+            assert_eq!(chan.next().await, Some(5));
 
             let mut chan2 = chan.clone();
             chan2.send(&6i32).await?;
-            assert_eq!(chan.recv().await, Some(6));
-            assert_eq!(chan2.recv().await, Some(6));
+            assert_eq!(chan.next().await, Some(6));
+            assert_eq!(chan2.next().await, Some(6));
             Ok::<(), futures_channel::mpsc::SendError>(())
         };
         assert_val_impl_send(&fut);
